@@ -1,9 +1,9 @@
+
 data "archive_file" "init" {
   type = "zip"
   source_dir = "${path.module}/src"
-  output_path = "${path.module}/output/src.zip"
+  output_path = "${path.module}/output/v5/src.zip"
 }
-
 
 provider "aws" {
   version = "~> 2.0"
@@ -31,7 +31,7 @@ EOF
 }
 
 resource "aws_lambda_function" "potkista_lambda" {
-  filename      = "${path.module}/output/src.zip"
+  filename      = "${path.module}/output/v5/src.zip"
   function_name = "potkista_lamda"
   role          = "${aws_iam_role.potkista_lambda_iam_role.arn}"
   handler       = "exports.handler"
@@ -47,7 +47,7 @@ resource "aws_api_gateway_rest_api" "potkista_lambda_gateway" {
 resource "aws_api_gateway_resource" "proxy" {
   rest_api_id = "${aws_api_gateway_rest_api.potkista_lambda_gateway.id}"
   parent_id   = "${aws_api_gateway_rest_api.potkista_lambda_gateway.root_resource_id}"
-  path_part   = "{proxy+}"
+  path_part   =  "{proxy+}"
 }
 
 resource "aws_api_gateway_method" "proxy" {
@@ -67,9 +67,27 @@ resource "aws_api_gateway_integration" "lambda" {
   uri                     = "${aws_lambda_function.potkista_lambda.invoke_arn}"
 }
 
+resource "aws_api_gateway_method" "proxy_root" {
+  rest_api_id   = "${aws_api_gateway_rest_api.potkista_lambda_gateway.id}"
+  resource_id   = "${aws_api_gateway_rest_api.potkista_lambda_gateway.root_resource_id}"
+  http_method   = "ANY"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "lambda_root" {
+  rest_api_id = "${aws_api_gateway_rest_api.potkista_lambda_gateway.id}"
+  resource_id = "${aws_api_gateway_method.proxy_root.resource_id}"
+  http_method = "${aws_api_gateway_method.proxy_root.http_method}"
+
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = "${aws_lambda_function.potkista_lambda.invoke_arn}"
+}
+
 resource "aws_api_gateway_deployment" "potkista_apigw_deployment" {
   depends_on = [
-    "aws_api_gateway_integration.lambda"
+    "aws_api_gateway_integration.lambda",
+    "aws_api_gateway_integration.lambda_root",
   ]
 
   rest_api_id = "${aws_api_gateway_rest_api.potkista_lambda_gateway.id}"
@@ -81,9 +99,6 @@ resource "aws_lambda_permission" "potkista_apigw" {
   action        = "lambda:InvokeFunction"
   function_name = "${aws_lambda_function.potkista_lambda.function_name}"
   principal     = "apigateway.amazonaws.com"
-
-  # The "/*/*" portion grants access from any method on any resource
-  # within the API Gateway REST API.
   source_arn = "${aws_api_gateway_rest_api.potkista_lambda_gateway.execution_arn}/*/*"
 }
 
